@@ -23,15 +23,28 @@
             [datahike-lmdb.handlers :as handlers]
             [datahike-lmdb.storage :as storage]
             [superv.async :refer [go-try-]])
-  (:import [me.tonsky.persistent_sorted_set Settings]))
+  (:import [me.tonsky.persistent_sorted_set Settings RefType]))
 
 (def ^:const +default-branching-factor+ 512)
 
+(defn- kw->ref-type
+  "Convert keyword to PSS RefType. Default is SOFT."
+  [kw]
+  (case kw
+    :strong RefType/STRONG
+    :weak RefType/WEAK
+    :soft RefType/SOFT
+    nil RefType/SOFT
+    RefType/SOFT))
+
 (defn- create-lmdb-store
   "Create an LMDBStore with PSS handlers configured.
-   Returns store with :storage-atom field for datahike to populate."
-  [{:keys [path map-size flags]}]
-  (let [settings (Settings. +default-branching-factor+ nil)
+   Returns store with :storage-atom field for datahike to populate.
+
+   Options:
+     :ref-type - Reference type for PSS nodes: :soft (default), :weak, :strong"
+  [{:keys [path map-size flags ref-type]}]
+  (let [settings (Settings. +default-branching-factor+ (kw->ref-type ref-type))
         storage-atom (atom nil)
         pss-handlers (handlers/create-pss-handlers settings storage-atom)
         ;; Create handler registry with our custom PSS handlers
