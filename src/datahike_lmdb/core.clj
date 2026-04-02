@@ -23,7 +23,7 @@
             [datahike-lmdb.handlers :as handlers]
             [datahike-lmdb.storage :as storage]
             [superv.async :refer [go-try-]])
-  (:import [me.tonsky.persistent_sorted_set Settings RefType]))
+  (:import [org.replikativ.persistent_sorted_set Settings RefType]))
 
 (def ^:const +default-branching-factor+ 512)
 

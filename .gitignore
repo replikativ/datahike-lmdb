@@ -10,3 +10,6 @@ target/
 /tmp/db/
 CLAUDE.md
 
+datahike
+persistent-sorted-set
+

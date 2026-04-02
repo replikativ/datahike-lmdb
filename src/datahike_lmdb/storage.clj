@@ -9,9 +9,9 @@
             [clojure.core.cache.wrapped :as wrapped]
             [konserve.core :as k]
             [hasch.core :refer [uuid]]
-            [taoensso.timbre :refer [trace]])
-  (:import [me.tonsky.persistent_sorted_set IStorage ANode Leaf Branch]
-           [java.util UUID]))
+            [replikativ.logging :as log])
+  (:import [org.replikativ.persistent_sorted_set IStorage ANode Leaf Branch]
+           [java.util UUID Date]))
 
 (set! *warn-on-reflection* true)
 
@@ -26,24 +26,24 @@
       (uuid (mapv (comp vec seq) (.keys node))))
     (uuid)))
 
-(defrecord BufferedStorage [store cache stats pending-writes crypto-hash?]
+(defrecord BufferedStorage [store cache stats pending-writes freed-addresses crypto-hash?]
   IStorage
   (store [_ node]
     (swap! stats update :writes inc)
     (let [address (gen-address node crypto-hash?)]
-      (trace "BufferedStorage.store:" address)
+      (log/trace :datahike-lmdb/store {:address address})
       (swap! pending-writes conj [address node])
       (wrapped/miss cache address node)
       address))
 
   (accessed [_ address]
-    (trace "BufferedStorage.accessed:" address)
+    (log/trace :datahike-lmdb/accessed {:address address})
     (swap! stats update :accessed inc)
     (wrapped/hit cache address)
     nil)
 
   (restore [_ address]
-    (trace "BufferedStorage.restore:" address)
+    (log/trace :datahike-lmdb/restore {:address address})
     (if-let [cached (wrapped/lookup cache address)]
       (do
         (swap! stats update :cache-hits inc)
@@ -55,7 +55,13 @@
                            :address address})))
         (swap! stats update :reads inc)
         (wrapped/miss cache address node)
-        node))))
+        node)))
+
+  (markFreed [_ address]
+    (when address
+      (let [now (Date.)]
+        (log/trace :datahike-lmdb/markFreed {:address address})
+        (swap! freed-addresses conj [address now])))))
 
 ;;; Public API
 
@@ -75,7 +81,8 @@
    store
    (atom (cache/lru-cache-factory {} :threshold cache-size))
    (atom {:writes 0 :reads 0 :accessed 0 :cache-hits 0})
-   (atom [])
+   (atom [])       ; pending-writes
+   (atom [])       ; freed-addresses: [address timestamp] pairs for GC
    crypto-hash?))
 
 (defn get-pending-writes
@@ -99,8 +106,7 @@
         pending (clear-pending-writes! storage)
         write-count (count pending)]
     (when (pos? write-count)
-      (trace "BufferedStorage.flush:" write-count "nodes")
-      ;; Use multi-assoc for batch writes in a single transaction
+      (log/trace :datahike-lmdb/flush {:count write-count})
       (k/multi-assoc store (into {} pending) {:sync? true}))
     write-count))
 

@@ -1,6 +1,6 @@
 {:deps {org.clojure/clojure            {:mvn/version "1.12.0" :scope "provided"}
-        io.replikativ/datahike          {:mvn/version "0.7.1620" :scope "provided"}
-        io.replikativ/konserve-lmdb     {:mvn/version "0.1.11"}}
+        org.replikativ/datahike         {:mvn/version "0.7.1663"}
+        org.replikativ/konserve-lmdb    {:mvn/version "0.1.13"}}
 
  :paths ["src"]
 

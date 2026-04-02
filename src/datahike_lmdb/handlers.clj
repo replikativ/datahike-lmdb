@@ -6,7 +6,7 @@
   (:require [konserve-lmdb.buffer :as buf]
             [datahike.datom :refer [index-type->cmp-quick]])
   (:import [datahike.datom Datom]
-           [me.tonsky.persistent_sorted_set PersistentSortedSet Leaf Branch Settings]
+           [org.replikativ.persistent_sorted_set PersistentSortedSet Leaf Branch Settings]
            [java.nio ByteBuffer]
            [java.util UUID]))
 
@@ -80,9 +80,11 @@
             level (.-_level br)
             len (.-_len br)
             keys (.-_keys br)
-            addresses (.-_addresses br)]
+            addresses (.-_addresses br)
+            subtree-count (.subtreeCount br)]
         (.putInt b level)
         (.putInt b len)
+        (.putLong b (or subtree-count -1))
         (dotimes [i len]
           (encode-fn b (aget keys i)))
         (dotimes [i len]
@@ -98,6 +100,7 @@
       (let [^ByteBuffer b buf
             level (.getInt b)
             len (.getInt b)
+            subtree-count (.getLong b)
             ^objects keys (make-array Object len)
             ^objects addresses (make-array Object len)]
         (dotimes [i len]
@@ -108,7 +111,7 @@
             (if (and (zero? msb) (zero? lsb))
               (aset addresses i nil)
               (aset addresses i (UUID. msb lsb)))))
-        (Branch. level len keys addresses nil settings)))))
+        (Branch. level len keys addresses nil subtree-count nil settings)))))
 
 ;;; PersistentSortedSet Handler (needs Settings and Storage)
 
