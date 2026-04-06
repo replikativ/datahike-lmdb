@@ -23,9 +23,16 @@
             [datahike-lmdb.handlers :as handlers]
             [datahike-lmdb.storage :as storage]
             [superv.async :refer [go-try-]])
-  (:import [org.replikativ.persistent_sorted_set Settings RefType]))
+  (:import [org.replikativ.persistent_sorted_set Settings RefType]
+           [java.io File]))
 
 (def ^:const +default-branching-factor+ 512)
+
+(defn- lmdb-store-exists?
+  "Check if an LMDB store actually exists at path by looking for data.mdb,
+   not just the directory. An empty directory is not a store."
+  [^String path]
+  (.exists (File. (File. path) "data.mdb")))
 
 (defn- kw->ref-type
   "Convert keyword to PSS RefType. Default is SOFT."
@@ -64,8 +71,8 @@
   [{:keys [path] :as config} opts]
   (async+sync (:sync? opts) *default-sync-translation*
               (go-try-
-               ;; Check if store already exists
-               (when (.exists (clojure.java.io/file path))
+               ;; Check if store already exists (by looking for data.mdb, not just dir)
+               (when (lmdb-store-exists? path)
                  (throw (ex-info (str "LMDB store already exists at path: " path)
                                  {:path path :config config})))
                (create-lmdb-store config))))
@@ -74,8 +81,8 @@
   [{:keys [path] :as config} opts]
   (async+sync (:sync? opts) *default-sync-translation*
               (go-try-
-               ;; Check if store exists
-               (when-not (.exists (clojure.java.io/file path))
+               ;; Check if store exists (by looking for data.mdb, not just dir)
+               (when-not (lmdb-store-exists? path)
                  (throw (ex-info (str "LMDB store does not exist at path: " path)
                                  {:path path :config config})))
                (create-lmdb-store config))))
@@ -84,7 +91,7 @@
   [{:keys [path]} opts]
   (async+sync (:sync? opts) *default-sync-translation*
               (go-try-
-               (.exists (clojure.java.io/file path)))))
+               (lmdb-store-exists? path))))
 
 (defmethod ks/-delete-store :lmdb
   [{:keys [path]} opts]
