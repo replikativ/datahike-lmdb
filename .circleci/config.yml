@@ -1,0 +1,72 @@
+version: 2.1
+
+orbs:
+  tools: replikativ/clj-tools@0
+
+executors:
+  java22:
+    docker:
+      - image: cimg/openjdk:22.0
+    working_directory: ~/repo
+
+jobs:
+  unittest:
+    executor: java22
+    steps:
+      - attach_workspace:
+          at: /home/circleci
+      - run:
+          name: Install Clojure CLI and liblmdb
+          command: |
+            curl -L -O https://github.com/clojure/brew-install/releases/latest/download/linux-install.sh
+            chmod +x linux-install.sh
+            sudo ./linux-install.sh
+            sudo apt-get update
+            sudo apt-get install -y liblmdb0
+      - run:
+          name: Run tests
+          command: clojure -M:test
+          no_output_timeout: 5m
+      - save_cache:
+          key: deps-{{ checksum "deps.edn" }}
+          paths:
+            - /home/circleci/.m2
+            - /home/circleci/.deps.clj
+
+workflows:
+  build-test-and-deploy:
+    jobs:
+      - tools/setup:
+          context: docker-deploy
+          setup_cljs: false
+      - tools/build:
+          context: docker-deploy
+          build_cljs: false
+          requires:
+            - tools/setup
+      - tools/format:
+          context: docker-deploy
+          requires:
+            - tools/setup
+      - unittest:
+          context: docker-deploy
+          requires:
+            - tools/build
+      - tools/deploy:
+          context:
+            - clojars-deploy
+            - docker-deploy
+          filters:
+            branches:
+              only: main
+          requires:
+            - unittest
+      - tools/release:
+          context:
+            - github-token
+            - docker-deploy
+          filters:
+            branches:
+              only: main
+          requires:
+            - tools/deploy
