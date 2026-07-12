@@ -56,7 +56,7 @@
         ;; Query
         (let [result (d/q '[:find ?n ?a
                             :where [?e :person/name ?n]
-                                   [?e :person/age ?a]]
+                            [?e :person/age ?a]]
                           @conn)]
           (is (= #{["Alice" 30] ["Bob" 25]} result)))
 

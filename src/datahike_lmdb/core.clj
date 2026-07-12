@@ -58,9 +58,9 @@
         type-handlers (buf/create-handler-registry pss-handlers nil)
         ;; Connect store with custom handlers
         store (lmdb/connect-store path
-                                   :map-size (or map-size lmdb/+default-map-size+)
-                                   :flags (or flags 0)
-                                   :type-handlers type-handlers)]
+                                  :map-size (or map-size lmdb/+default-map-size+)
+                                  :flags (or flags 0)
+                                  :type-handlers type-handlers)]
     ;; Store the storage-atom so datahike's add-konserve-handlers can find it
     (assoc store :storage-atom storage-atom)))
 
