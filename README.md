@@ -1,5 +1,10 @@
 # datahike-lmdb
 
+[![Slack](https://img.shields.io/badge/slack-join_chat-brightgreen.svg)](https://clojurians.slack.com/archives/CB7GJAN0L)
+[![Clojars](https://img.shields.io/clojars/v/org.replikativ/datahike-lmdb.svg)](https://clojars.org/org.replikativ/datahike-lmdb)
+[![CircleCI](https://circleci.com/gh/replikativ/datahike-lmdb.svg?style=shield)](https://circleci.com/gh/replikativ/datahike-lmdb)
+[![Last Commit](https://img.shields.io/github/last-commit/replikativ/datahike-lmdb/main.svg)](https://github.com/replikativ/datahike-lmdb/tree/main)
+
 LMDB storage backend for [Datahike](https://github.com/replikativ/datahike).
 
 ## Features
