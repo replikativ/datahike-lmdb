@@ -1,6 +1,10 @@
-{:deps {org.clojure/clojure            {:mvn/version "1.12.0" :scope "provided"}
-        org.replikativ/datahike         {:mvn/version "0.7.1663"}
-        org.replikativ/konserve-lmdb    {:mvn/version "0.1.14"}}
+{:deps {org.clojure/clojure                 {:mvn/version "1.12.0" :scope "provided"}
+        org.replikativ/datahike              {:mvn/version "0.8.1725"}
+        ;; Pin explicitly so the diff-buf-aware PSS + konserve resolve regardless of
+        ;; konserve-lmdb's transitive versions.
+        org.replikativ/persistent-sorted-set {:mvn/version "0.4.137"}
+        org.replikativ/konserve              {:mvn/version "0.9.353"}
+        org.replikativ/konserve-lmdb         {:mvn/version "0.1.14"}}
 
  :paths ["src"]
 
