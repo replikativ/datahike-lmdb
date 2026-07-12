@@ -2,7 +2,19 @@
   "Buffer type handlers for PSS types (Datom, Leaf, Branch, PersistentSortedSet).
 
    These handlers close over settings and storage-atom for decode context,
-   allowing them to work without modifying datahike internals."
+   allowing them to work without modifying datahike internals.
+
+   Format versioning (backward compatibility): the on-disk node format grew to
+   become self-describing (per-node branching-factor + diff-buf-size; Branch also
+   carries measure + diff-buf slots) so it can round-trip diff-buffered writes.
+   To keep reading databases written before that, node types have TWO tags:
+     - v1 (0x41/0x42/0x43): the legacy pre-diff-buf layout — DECODE ONLY.
+     - v2 (0x51/0x52/0x53): the current self-describing layout — encode + decode.
+   The registry dispatches decode by tag (both layouts read) and encode by class
+   (always v2), so old blobs still load, new writes are v2, and a mixed store
+   self-heals as the tree rewrites. Legacy nodes are reconstructed with the
+   store's Settings (branching-factor from the store, diff-buf-size 0), which is
+   exactly what produced them."
   (:require [konserve-lmdb.buffer :as buf]
             [datahike.datom :refer [index-type->cmp-quick]])
   (:import [datahike.datom Datom]
@@ -12,7 +24,7 @@
 
 (set! *warn-on-reflection* true)
 
-;;; Per-node Settings reconstruction (self-describing nodes)
+;;; Per-node Settings reconstruction (self-describing v2 nodes)
 ;;;
 ;;; The new PSS carries a diff-buf on Branch nodes, gated by Settings.diffBufSize().
 ;;; Whether a restored Branch projects its buffered `slots` onto children on read is
@@ -21,10 +33,9 @@
 ;;; factor and diffBufSize=0, so reconstructing every node from it would silently DISABLE
 ;;; diff-buf projection on reopen -> buffered writes lost.
 ;;;
-;;; Following the canonical PSS fressian handlers, we make each node SELF-DESCRIBING:
-;;; every Leaf/Branch/root blob additionally carries its branching-factor + diff-buf-size,
-;;; and decode reconstructs a per-node Settings from them (reusing the store's ref-type +
-;;; nil measure/leaf-processor). Memoized on [bf dbs] to avoid per-node allocation.
+;;; Following the canonical PSS fressian handlers, each v2 Leaf/Branch/root blob carries
+;;; its branching-factor + diff-buf-size, and decode reconstructs a per-node Settings from
+;;; them (reusing the store's ref-type + nil measure/leaf-processor). Memoized on [bf dbs].
 
 (defn- make-settings-reconstructor
   "Return a memoized (fn [bf dbs] -> Settings) that mirrors the store's ref-type but uses
@@ -35,14 +46,21 @@
      (fn [bf dbs]
        (Settings. (int bf) rt nil nil (int dbs))))))
 
-;;; Type tags in custom range (0x40-0xFF)
-;;; Built-in tags use 0x00-0x1C, so we start at 0x40 for safety
-(def ^:const TAG_DATOM  (byte 0x40))
-(def ^:const TAG_LEAF   (byte 0x41))
-(def ^:const TAG_BRANCH (byte 0x42))
-(def ^:const TAG_PSS    (byte 0x43))
+;;; Type tags in custom range (0x40-0xFF); built-in tags use 0x00-0x1C.
+(def ^:const TAG_DATOM     (byte 0x40))
+;; v1 — legacy pre-diff-buf layout (decode only)
+(def ^:const TAG_LEAF_V1   (byte 0x41))
+(def ^:const TAG_BRANCH_V1 (byte 0x42))
+(def ^:const TAG_PSS_V1    (byte 0x43))
+;; v2 — self-describing, diff-buf-aware layout (encode + decode)
+(def ^:const TAG_LEAF_V2   (byte 0x51))
+(def ^:const TAG_BRANCH_V2 (byte 0x52))
+(def ^:const TAG_PSS_V2    (byte 0x53))
 
-;;; Datom Handler (no context needed)
+(defn- decode-only [what]
+  (throw (ex-info (str "legacy datahike-lmdb " what " handler is decode-only; writes use v2") {})))
+
+;;; Datom Handler (unchanged; no format version)
 
 (defn create-datom-handler
   "Create handler for Datom type."
@@ -65,18 +83,15 @@
             tx (.getLong b)]
         (Datom. e a v tx 0)))))
 
-;;; Leaf Handler (needs Settings)
+;;; ── v2 handlers (self-describing; used for all encoding) ────────────────────
 
 (defn create-leaf-handler
-  "Create handler for Leaf type. Closes over settings.
-
-   Self-describing: serializes branching-factor + diff-buf-size so a restored Leaf's
-   Settings match the store that produced it (a single-leaf root that is reopened and
-   mutated must split at the right branching factor / buffer correctly)."
+  "v2 Leaf handler. Self-describing: serializes branching-factor + diff-buf-size so a
+   restored Leaf's Settings match the store that produced it."
   [^Settings settings]
   (let [mk-settings (make-settings-reconstructor settings)]
     (reify buf/ITypeHandler
-      (type-tag [_] TAG_LEAF)
+      (type-tag [_] TAG_LEAF_V2)
       (type-class [_] Leaf)
       (encode-type [_ buf leaf _encode-fn]
         (let [^ByteBuffer b buf
@@ -99,8 +114,6 @@
             (aset keys i (decode-fn b)))
           (Leaf. len keys (mk-settings bf dbs)))))))
 
-;;; Branch Handler (needs Settings)
-
 (defn- attach-slots!
   "Rebuild a restored Branch's diff-buf slots from the stored {idx -> entry} map and
    install them. Mirrors org.replikativ.persistent-sorted-set.fressian/attach-slots!:
@@ -117,16 +130,13 @@
     (.installSlots b arr Branch/BUF_LAZY)))
 
 (defn create-branch-handler
-  "Create handler for Branch type. Closes over settings.
-
-   Serializes (and restores) the diff-buf `slots` map so a Branch carrying buffered writes
-   survives an LMDB round-trip; without it buffered diffs would be silently dropped on
-   reopen -> data corruption. Also self-describing (branching-factor + diff-buf-size) so
-   the restored Branch's Settings.diffBufSize() > 0 and projection actually fires."
+  "v2 Branch handler. Serializes (and restores) the diff-buf `slots` map so a Branch
+   carrying buffered writes survives an LMDB round-trip, plus branching-factor +
+   diff-buf-size so the restored Branch's projection fires."
   [^Settings settings]
   (let [mk-settings (make-settings-reconstructor settings)]
     (reify buf/ITypeHandler
-      (type-tag [_] TAG_BRANCH)
+      (type-tag [_] TAG_BRANCH_V2)
       (type-class [_] Branch)
       (encode-type [_ buf branch encode-fn]
         (let [^ByteBuffer b buf
@@ -154,9 +164,6 @@
                   (.putLong b 0)
                   (.putLong b 0)))))
           ;; measure (nil for datahike) then the diff-buf slots (nil when buffer empty/off).
-          ;; Both go through the generic registry codec, which round-trips Clojure maps/sets/
-          ;; keywords/longs and Datoms (via the Datom handler) — the leaf-diff storage form
-          ;; {:absent #{datom...} :present #{datom...}} therefore round-trips.
           (encode-fn b (.-_measure br))
           (encode-fn b (.slotsForStorage br))))
       (decode-type [_ buf decode-fn]
@@ -185,15 +192,12 @@
             (when slots (attach-slots! b* addresses slots))
             b*))))))
 
-;;; PersistentSortedSet Handler (needs Settings and Storage)
-
 (defn create-pss-handler
-  "Create handler for PersistentSortedSet type.
-   Closes over settings and storage-atom for decode context."
+  "v2 PersistentSortedSet (root) handler. Closes over settings and storage-atom."
   [^Settings settings storage-atom]
   (let [mk-settings (make-settings-reconstructor settings)]
     (reify buf/ITypeHandler
-      (type-tag [_] TAG_PSS)
+      (type-tag [_] TAG_PSS_V2)
       (type-class [_] PersistentSortedSet)
       (encode-type [_ buf pss encode-fn]
         (let [^ByteBuffer b buf
@@ -206,8 +210,6 @@
             (.putLong b (.getMostSignificantBits addr))
             (.putLong b (.getLeastSignificantBits addr)))
           (.putInt b (count p))
-          ;; Self-describing: the root's branching-factor + diff-buf-size, so a reopened
-          ;; root that is then mutated buffers / splits with its original settings.
           (.putInt b (.branchingFactor s))
           (.putInt b (.diffBufSize s))))
       (decode-type [_ buf decode-fn]
@@ -220,29 +222,85 @@
               bf (.getInt b)
               dbs (.getInt b)
               storage @storage-atom
-              index-type (:index-type pss-meta)
-              cmp (index-type->cmp-quick index-type false)]
-          ;; Always reconstruct a REAL PersistentSortedSet — never a stub. `storage`
-          ;; may be nil here: for a direct :lmdb store datahike fills the store's
-          ;; storage-atom, but for an LMDB *tiered frontend* the atom is nested and
-          ;; not datahike-filled. That's fine — the root carries only its address,
-          ;; and datahike binds the connection's tier-wide storage onto it at
-          ;; materialization (writing.cljc `attach` / index/with-storage). PSS then
-          ;; threads that storage to children via child(storage, idx); restored
-          ;; children are bare nodes, so no per-node storage is needed. Returning a
-          ;; stub (a plain map, not a PSS) here defeats `attach` — it only re-binds
-          ;; PersistentSortedSet roots — which is what broke the tiered case.
+              cmp (index-type->cmp-quick (:index-type pss-meta) false)]
+          ;; Always reconstruct a REAL PersistentSortedSet — never a stub. `storage` may be
+          ;; nil for an LMDB tiered frontend (the atom is nested, not datahike-filled); that's
+          ;; fine — datahike binds the connection's storage onto the root at materialization
+          ;; (writing.cljc `attach` / index/with-storage) and PSS threads it to children via
+          ;; child(storage, idx). Returning a stub (a plain map) defeats `attach`.
           (PersistentSortedSet. pss-meta cmp address storage nil cnt (mk-settings bf dbs) 0))))))
+
+;;; ── v1 legacy handlers (decode pre-diff-buf databases) ──────────────────────
+;;; Old layout had no per-node branching-factor / diff-buf-size / measure / slots.
+;;; Reconstruct with the store's Settings (bf from the store, diff-buf-size 0), which is
+;;; what wrote them. Encode is never invoked (the registry encodes by class -> v2).
+
+(defn create-leaf-handler-v1 [^Settings settings]
+  (reify buf/ITypeHandler
+    (type-tag [_] TAG_LEAF_V1)
+    (type-class [_] Leaf)
+    (encode-type [_ _ _ _] (decode-only "Leaf"))
+    (decode-type [_ buf decode-fn]
+      (let [^ByteBuffer b buf
+            len (.getInt b)
+            ^objects keys (make-array Object len)]
+        (dotimes [i len]
+          (aset keys i (decode-fn b)))
+        (Leaf. len keys settings)))))
+
+(defn create-branch-handler-v1 [^Settings settings]
+  (reify buf/ITypeHandler
+    (type-tag [_] TAG_BRANCH_V1)
+    (type-class [_] Branch)
+    (encode-type [_ _ _ _] (decode-only "Branch"))
+    (decode-type [_ buf decode-fn]
+      (let [^ByteBuffer b buf
+            level (.getInt b)
+            len (.getInt b)
+            subtree-count (.getLong b)
+            ^objects keys (make-array Object len)
+            ^objects addresses (make-array Object len)]
+        (dotimes [i len]
+          (aset keys i (decode-fn b)))
+        (dotimes [i len]
+          (let [msb (.getLong b)
+                lsb (.getLong b)]
+            (if (and (zero? msb) (zero? lsb))
+              (aset addresses i nil)
+              (aset addresses i (UUID. msb lsb)))))
+        (let [b* (Branch. (int level) (Arrays/asList keys) (Arrays/asList addresses) settings)]
+          (set! (.-_subtreeCount b*) (long subtree-count))
+          b*)))))
+
+(defn create-pss-handler-v1 [^Settings settings storage-atom]
+  (reify buf/ITypeHandler
+    (type-tag [_] TAG_PSS_V1)
+    (type-class [_] PersistentSortedSet)
+    (encode-type [_ _ _ _] (decode-only "PersistentSortedSet"))
+    (decode-type [_ buf decode-fn]
+      (let [^ByteBuffer b buf
+            pss-meta (decode-fn b)
+            msb (.getLong b)
+            lsb (.getLong b)
+            address (UUID. msb lsb)
+            cnt (.getInt b)
+            storage @storage-atom
+            cmp (index-type->cmp-quick (:index-type pss-meta) false)]
+        (PersistentSortedSet. pss-meta cmp address storage nil cnt settings 0)))))
 
 ;;; Factory function
 
 (defn create-pss-handlers
-  "Create all PSS type handlers with given settings and storage-atom.
+  "All PSS type handlers for a store's `settings` + `storage-atom`.
 
-   The handlers close over these references, allowing decode to access
-   the storage after it's been created."
+   v1 (legacy) handlers are listed BEFORE v2 so the registry's encode dispatch
+   (by class, last-write-wins) resolves to v2, while decode dispatch (by tag)
+   keeps both — old-format blobs still read, new writes are v2."
   [^Settings settings storage-atom]
   [(create-datom-handler)
+   (create-leaf-handler-v1 settings)
+   (create-branch-handler-v1 settings)
+   (create-pss-handler-v1 settings storage-atom)
    (create-leaf-handler settings)
    (create-branch-handler settings)
    (create-pss-handler settings storage-atom)])

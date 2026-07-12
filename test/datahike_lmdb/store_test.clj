@@ -2,7 +2,10 @@
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [datahike.api :as d]
             [konserve.store :as ks]
-            [datahike-lmdb.core]))
+            [konserve-lmdb.buffer :as buf]
+            [datahike-lmdb.handlers :as handlers]
+            [datahike-lmdb.core])
+  (:import [org.replikativ.persistent_sorted_set PersistentSortedSet Leaf Branch Settings RefType]))
 
 (def test-path "/tmp/datahike-lmdb-test")
 (def test-id (java.util.UUID/randomUUID))
@@ -83,3 +86,18 @@
                         @conn)]
         (is (= #{["Widget"]} result))
         (d/release conn)))))
+
+(deftest dual-format-handler-dispatch
+  (testing "registry keeps legacy (v1) tags for DECODE and encodes as v2 (backward compat)"
+    (let [settings (Settings. 512 RefType/SOFT)
+          reg      (buf/create-handler-registry
+                    (handlers/create-pss-handlers settings (atom nil)) nil)
+          by-tag   (:by-tag reg)]
+      (testing "all node tags — legacy v1 (0x41-0x43) AND v2 (0x51-0x53) — are decodable"
+        (doseq [t [0x40 0x41 0x42 0x43 0x51 0x52 0x53]]
+          (is (some? (.get ^java.util.HashMap by-tag (int t)))
+              (format "tag 0x%02x must route to a decode handler" t))))
+      (testing "encode (dispatch by class) resolves to the v2 handler for every node type"
+        (is (= handlers/TAG_LEAF_V2   (buf/type-tag (buf/registry-get-handler-for-class reg Leaf))))
+        (is (= handlers/TAG_BRANCH_V2 (buf/type-tag (buf/registry-get-handler-for-class reg Branch))))
+        (is (= handlers/TAG_PSS_V2    (buf/type-tag (buf/registry-get-handler-for-class reg PersistentSortedSet))))))))
