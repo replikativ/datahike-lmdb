@@ -5,6 +5,10 @@
 [![CircleCI](https://circleci.com/gh/replikativ/datahike-lmdb.svg?style=shield)](https://circleci.com/gh/replikativ/datahike-lmdb)
 [![Last Commit](https://img.shields.io/github/last-commit/replikativ/datahike-lmdb/main.svg)](https://github.com/replikativ/datahike-lmdb/tree/main)
 
+**Note: This library is currently in beta. The API may change in future releases.**
+It builds on [konserve-lmdb](https://github.com/replikativ/konserve-lmdb), which is itself
+in beta, so this backend cannot be more stable than that one.
+
 LMDB storage backend for [Datahike](https://github.com/replikativ/datahike).
 
 ## Features
