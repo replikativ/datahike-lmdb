@@ -1,10 +1,12 @@
 {:deps {org.clojure/clojure                 {:mvn/version "1.12.0" :scope "provided"}
-        org.replikativ/datahike              {:mvn/version "0.8.1729"}
-        ;; Pin explicitly so the diff-buf-aware PSS + konserve resolve regardless of
-        ;; konserve-lmdb's transitive versions.
-        org.replikativ/persistent-sorted-set {:mvn/version "0.4.137"}
-        org.replikativ/konserve              {:mvn/version "0.9.356"}
-        org.replikativ/konserve-lmdb         {:mvn/version "0.1.16"}}
+        ;; BORING CODEC. datahike 0.8.1777 shipped `datahike.cbor`, whose
+        ;; PSS/Datom/DB handlers install into konserve-lmdb's boring `:registry`
+        ;; (0.1.17+). boring resolves to 0.1.21 transitively via datahike. See
+        ;; src/datahike_lmdb/core.clj for the registry wiring (+ legacy decode).
+        org.replikativ/datahike              {:mvn/version "0.8.1777"}
+        org.replikativ/persistent-sorted-set {:mvn/version "0.5.140"}
+        org.replikativ/konserve              {:mvn/version "0.9.372"}
+        org.replikativ/konserve-lmdb         {:mvn/version "0.1.19"}}
 
  :paths ["src"]
 

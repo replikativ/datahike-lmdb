@@ -22,6 +22,8 @@
             [konserve-lmdb.buffer :as buf]
             [datahike-lmdb.handlers :as handlers]
             [datahike-lmdb.storage :as storage]
+            [datahike.cbor :as dcbor]
+            [boring.core :as boring]
             [superv.async :refer [go-try-]])
   (:import [org.replikativ.persistent_sorted_set Settings RefType]
            [java.io File]))
@@ -53,14 +55,24 @@
   [{:keys [path map-size flags ref-type]}]
   (let [settings (Settings. +default-branching-factor+ (kw->ref-type ref-type))
         storage-atom (atom nil)
-        pss-handlers (handlers/create-pss-handlers settings storage-atom)
-        ;; Create handler registry with our custom PSS handlers
-        type-handlers (buf/create-handler-registry pss-handlers nil)
-        ;; Connect store with custom handlers
+        ;; BORING (byte 3 / split): datahike's CBOR handlers -- PSS Leaf/Branch/root
+        ;; plus Datom/DB/TxReport -- installed into konserve-lmdb's boring `:registry`.
+        ;; PSS roots resolve their storage through the write-once `storage-atom` cell
+        ;; that datahike's `add-konserve-handlers` populates on connect.
+        registry (dcbor/install (boring/tag-registry)
+                                {:resolve-storage (fn [_] @storage-atom)})
+        ;; LEGACY (byte 0 / buffer): kept DECODE-ONLY so pre-boring (0.1.6/0.1.7)
+        ;; stores still read. konserve-lmdb writes boring now, so a mixed store
+        ;; self-heals to boring as datahike rewrites index nodes -- no re-import.
+        legacy-handlers (buf/create-handler-registry
+                         (handlers/create-pss-handlers settings storage-atom) nil)
+        ;; Connect with BOTH: konserve-lmdb's store-decode routes by leading byte
+        ;; (legacy? -> :type-handlers, split/boring -> :registry).
         store (lmdb/connect-store path
                                   :map-size (or map-size lmdb/+default-map-size+)
                                   :flags (or flags 0)
-                                  :type-handlers type-handlers)]
+                                  :registry registry
+                                  :type-handlers legacy-handlers)]
     ;; Store the storage-atom so datahike's add-konserve-handlers can find it
     (assoc store :storage-atom storage-atom)))
 
