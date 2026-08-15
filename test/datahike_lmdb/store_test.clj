@@ -1,11 +1,14 @@
 (ns datahike-lmdb.store-test
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
+            [clojure.java.io :as io]
             [datahike.api :as d]
             [konserve.store :as ks]
             [konserve-lmdb.buffer :as buf]
             [datahike-lmdb.handlers :as handlers]
             [datahike-lmdb.core])
-  (:import [org.replikativ.persistent_sorted_set PersistentSortedSet Leaf Branch Settings RefType]))
+  (:import [org.replikativ.persistent_sorted_set PersistentSortedSet Leaf Branch Settings RefType]
+           [java.nio.file Files]
+           [java.nio.file.attribute FileAttribute]))
 
 (def test-path "/tmp/datahike-lmdb-test")
 (def test-id (java.util.UUID/randomUUID))
@@ -101,3 +104,31 @@
         (is (= handlers/TAG_LEAF_V2   (buf/type-tag (buf/registry-get-handler-for-class reg Leaf))))
         (is (= handlers/TAG_BRANCH_V2 (buf/type-tag (buf/registry-get-handler-for-class reg Branch))))
         (is (= handlers/TAG_PSS_V2    (buf/type-tag (buf/registry-get-handler-for-class reg PersistentSortedSet))))))))
+
+;; ---------------------------------------------------------------------------
+;; End-to-end backward compatibility: a store written by the PRE-BORING
+;; datahike-lmdb (konserve-lmdb 0.1.16, buffer codec, PSS 0.4.137) must read
+;; under the current boring config. The fixture in test/resources was generated
+;; from this repo's own commit 33f8286 -- see doc/legacy-fixture. Reading proves
+;; konserve-lmdb routes buffer blobs to the legacy :type-handlers while the store
+;; is opened with the boring :registry, and that the v1 keyspace still resolves.
+
+(def ^:private legacy-fixture "test/resources/legacy-buffer-store")
+(def ^:private legacy-id #uuid "0f1e2d3c-4b5a-6789-0abc-def012345678")
+
+(defn- copy-fixture-to-temp ^String []
+  (let [tmp (.toString (Files/createTempDirectory "legacy-store" (make-array FileAttribute 0)))]
+    (io/copy (io/file legacy-fixture "data.mdb") (io/file tmp "data.mdb"))
+    tmp))
+
+(deftest reads-pre-boring-buffer-store
+  (testing "a real store written by the pre-boring buffer codec reads under the boring config"
+    (let [path (copy-fixture-to-temp)
+          cfg  {:store {:backend :lmdb :path path :id legacy-id}
+                :schema-flexibility :write :keep-history? false}
+          conn (d/connect cfg)]
+      (try
+        (is (= #{["Widget"] ["Gadget"] ["Gizmo"]}
+               (d/q '[:find ?n :where [?e :item/name ?n]] @conn))
+            "buffer-encoded PSS/Datom values decode via the legacy :type-handlers")
+        (finally (d/release conn))))))
